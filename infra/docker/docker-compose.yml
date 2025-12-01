@@ -1,0 +1,161 @@
+version: "3.9"
+
+services:
+
+  #################################################################
+  # InfluxDB (Time-Series Database)
+  #################################################################
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    ports:
+      - "8086:8086"
+    environment:
+      INFLUXDB_ADMIN_USER: admin
+      INFLUXDB_ADMIN_PASSWORD: admin123
+    volumes:
+      - influx_data:/var/lib/influxdb2
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # PostgreSQL (Relational Database)
+  #################################################################
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: irrigation
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # Mosquitto MQTT Broker (Sensor Communication)
+  #################################################################
+  mosquitto:
+    image: eclipse-mosquitto
+    container_name: mqtt
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_config:/mosquitto/config
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # ChirpStack LoRaWAN Stack (Gateway → Network Server)
+  #################################################################
+  chirpstack:
+    image: chirpstack/chirpstack:4
+    container_name: chirpstack
+    depends_on:
+      - postgres
+      - mosquitto
+    ports:
+      - "8090:8090"
+    environment:
+      CHIRPSTACK_API_PORT: 8090
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # Backend API (FastAPI)
+  #################################################################
+  backend:
+    build: ../../backend
+    container_name: backend
+    ports:
+      - "8000:8000"
+    environment:
+      INFLUXDB_URL: http://influxdb:8086
+      POSTGRES_URL: postgres://admin:admin123@postgres:5432/irrigation
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+      WEATHER_API_URL: http://weather:5001
+    depends_on:
+      - influxdb
+      - postgres
+      - mosquitto
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # AI / Rule Engine Service
+  #################################################################
+  rule_engine:
+    build: ../../rule_engine
+    container_name: rule_engine
+    depends_on:
+      - backend
+      - influxdb
+    environment:
+      INFLUXDB_URL: http://influxdb:8086
+      WEATHER_API_URL: http://weather:5001
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # Weather Microservice (OpenWeather → InfluxDB Writer)
+  #################################################################
+  weather:
+    build: ../../weather_service
+    container_name: weather_service
+    ports:
+      - "5001:5001"
+    environment:
+      WEATHER_API_KEY: "YOUR_KEY_HERE"
+      INFLUXDB_URL: http://influxdb:8086
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # Sensor Simulator (IoT Team)
+  #################################################################
+  simulator:
+    build: ../../simulator
+    container_name: sensor_simulator
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: 1883
+    networks:
+      - irrigation_net
+
+  #################################################################
+  # Frontend Dashboard (React)
+  #################################################################
+  frontend:
+    build: ../../frontend
+    container_name: frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+      - weather
+      - rule_engine
+    networks:
+      - irrigation_net
+
+
+###################################################################
+# VOLUMES
+###################################################################
+volumes:
+  influx_data:
+  pg_data:
+  mosquitto_data:
+  mosquitto_config:
+
+###################################################################
+# NETWORKS
+###################################################################
+networks:
+  irrigation_net:
+    driver: bridge
